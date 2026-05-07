@@ -1,0 +1,9 @@
+{
+  "miniprogramRoot": "./",
+  "projectname": "blackhole-3d-xr",
+  "appid": "testAppId",
+  "setting": {
+    "es6": false,
+    "minified": false
+  }
+}
