@@ -11,28 +11,38 @@ export default function Index() {
   return (
     <View className='index'>
       <View className='header'>
-        <Text className='title'>黑洞引擎 3D WebXR</Text>
-        <Text className='subtitle'>移动端 BIM 模型查看器</Text>
+        <Text className='title'>WebAR · 图像识别</Text>
+        <Text className='subtitle'>Three.js + AR.js 移动端 AR</Text>
       </View>
       
       <View className='features'>
         <Text className='feature-title'>核心功能</Text>
-        <Text className='feature-item'>• 3D BIM 模型渲染</Text>
-        <Text className='feature-item'>• 单指旋转视角</Text>
-        <Text className='feature-item'>• 双指缩放模型</Text>
-        <Text className='feature-item'>• 双指平移视角</Text>
-        <Text className='feature-item'>• 构件探测选中</Text>
+        <Text className='feature-item'>• 摄像头实时预览</Text>
+        <Text className='feature-item'>• 图像识别追踪（Hiro 图案）</Text>
+        <Text className='feature-item'>• FBX 模型叠加显示</Text>
+        <Text className='feature-item'>• 模型居中自动缩放</Text>
+        <Text className='feature-item'>• 骨骼动画播放</Text>
+        <Text className='feature-item'>• BlackHole SDK 接口保留</Text>
       </View>
       
       <Navigator url='/pages/viewer/index' className='btn-primary'>
-        进入 3D 查看器
+        进入 AR 体验
       </Navigator>
       
       <View className='tech-info'>
         <Text className='tech-title'>技术栈</Text>
         <Text className='tech-item'>Taro 3.6 + React 18</Text>
-        <Text className='tech-item'>BlackHole Engine SDK v3.2</Text>
+        <Text className='tech-item'>Three.js + AR.js 2.2.2</Text>
         <Text className='tech-item'>Webpack 5 + TypeScript</Text>
+        <Text className='tech-item'>FBX 模型支持（原生加载）</Text>
+      </View>
+
+      <View className='guide'>
+        <Text className='guide-title'>使用说明</Text>
+        <Text className='guide-item'>1. 点击「进入 AR 体验」</Text>
+        <Text className='guide-item'>2. 允许摄像头权限</Text>
+        <Text className='guide-item'>3. 将手机对准 Hiro 识别图</Text>
+        <Text className='guide-item'>4. 识别后即可看到 3D 模型叠加</Text>
       </View>
     </View>
   )

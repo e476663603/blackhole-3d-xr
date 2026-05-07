@@ -22,6 +22,7 @@ export default defineConfig(async (merge, { command, mode }) => {
     },
     copy: {
       patterns: [
+        { from: 'public/models', to: 'models' },
       ],
       options: {
       }

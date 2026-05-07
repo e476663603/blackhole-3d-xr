@@ -92,3 +92,26 @@
   color: #555;
   line-height: 1.8;
 }
+
+.guide {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 12px;
+  padding: 25px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 10px;
+}
+
+.guide-title {
+  display: block;
+  font-size: 26px;
+  color: #4fc3f7;
+  margin-bottom: 15px;
+}
+
+.guide-item {
+  display: block;
+  font-size: 24px;
+  color: #888;
+  line-height: 1.8;
+}

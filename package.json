@@ -56,8 +56,10 @@
     "@tarojs/shared": "3.6.30",
     "@tarojs/taro": "3.6.30",
     "ajv": "^8.20.0",
+    "ar.js": "^2.2.2",
     "react": "^18.0.0",
-    "react-dom": "^18.0.0"
+    "react-dom": "^18.0.0",
+    "three": "^0.184.0"
   },
   "devDependencies": {
     "@babel/core": "^7.8.0",

@@ -1,320 +1,352 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
-import { View, Text } from '@tarojs/components';
-import Taro from '@tarojs/taro';
-import './viewer.scss';
+/**
+ * WebAR 页面 - 图像识别 + 3D 模型叠加
+ * 基于 AR.js + Three.js
+ *
+ * 【保留 BlackHole SDK 接口注释】如需恢复黑洞引擎，注释掉下方 AR 代码段，
+ * 取消 src/components/blackhole-loader.ts 的引用即可。
+ */
+import { useEffect, useRef, useState } from 'react'
+import { View, Text } from '@tarojs/components'
+import Taro from '@tarojs/taro'
+import './viewer.scss'
 
-const SDK_BASE = '/sdk';
+// ─── AR 场景类型声明 ───────────────────────────────────────────────────────
+declare const ARjs: any
 
-// ========== SunrtCloud 数据集配置（从 XHR 请求中获取） ==========
-const SDK_CONFIG = {
-  commonUrl: 'https://bim.sunrtcloud.com',
-  datasetId: 'b3a8f0de-2b7b-4e7a-9b3a-c1e2f8d3a4b5',
-  resourcesAddress: 'https://bim.sunrtcloud.com/ModuleDir/ProjectData/b3a8f0de-2b7b-4e7a-9b3a-c1e2f8d3a4b5',
-  userName: '',
-  passWord: '',
-};
+type ARStatus =
+  | 'idle'
+  | 'camera-requesting'
+  | 'camera-denied'
+  | 'ar-inited'
+  | 'marker-detected'
+  | 'model-loading'
+  | 'model-ready'
+  | 'error'
 
-declare global {
-  interface Window {
-    CreateBlackHoleWebSDK: (module: any) => void;
-    CreateModuleRE2: any; // RealBIMWeb.js 导出
-  }
-}
-
-type S = 'idle' | 'sdk-loading' | 'sdk-ready' | 'engine-init' | 'engine-ready' | 'model-loading' | 'model-ready' | 'error';
+const MODEL_URL = '/models/test.fbx'
+const MARKER_URL = '/images/marker.png'   // 识别图（需自行放置）
+const DEFAULT_MARKER_PATTERN = 'https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png'
 
 export default function Viewer() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const moduleRef = useRef<any>(null);
-  const [status, setStatus] = useState<S>('idle');
-  const [errorMsg, setErrorMsg] = useState('');
-  const [progress, setProgress] = useState('');
-  const [canvasH, setCanvasH] = useState(65); // vh
+  const rendererRef = useRef<any>(null)
+  const sceneRef = useRef<any>(null)
+  const cameraRef = useRef<any>(null)
+  const arMarkerRef = useRef<any>(null)
+  const mixerRef = useRef<any>(null)
+  const clockRef = useRef<any>(null)
+  const animationIdRef = useRef<number>(0)
+  const modelGroupRef = useRef<any>(null)
 
-  // 事件监听
-  useEffect(() => {
-    const onEngineCreated = (e: any) => {
-      console.log('[BH] Engine created:', e.detail);
-      if (e.detail.succeed) {
-        setStatus('engine-ready');
-        setCanvasH(65);
-        Taro.showToast({ title: '引擎就绪', icon: 'success', duration: 1500 });
-      } else {
-        setStatus('error');
-        setErrorMsg('引擎创建失败: ' + (e.detail.info || ''));
-      }
-    };
-    const onProgress = (e: any) => {
-      setProgress(`${e.detail.progress}% ${e.detail.info || ''}`);
-      console.log('[BH] Progress:', e.detail.progress, e.detail.info);
-    };
-    const onLoadFinish = (e: any) => {
-      console.log('[BH] Load finish:', e.detail);
-      if (e.detail.succeed) {
-        setStatus('model-ready');
-        setCanvasH(65);
-        Taro.showToast({ title: '模型加载完成', icon: 'success' });
-      } else {
-        setStatus('error');
-        setErrorMsg('模型加载失败: ' + (e.detail.info || ''));
-      }
-    };
-    const onSystemReady = () => console.log('[BH] System ready');
-    const onCameraMove = () => {/* camera move log */}
-    const onSelChanged = (e: any) => console.log('[BH] Selection:', e.detail);
+  const [status, setStatus] = useState<ARStatus>('idle')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [progress, setProgress] = useState('')
+  const [markerFound, setMarkerFound] = useState(false)
 
-    document.addEventListener('RESystemEngineCreated', onEngineCreated);
-    document.addEventListener('REDataSetLoadProgress', onProgress);
-    document.addEventListener('REDataSetLoadFinish', onLoadFinish);
-    document.addEventListener('RESystemReady', onSystemReady);
-    document.addEventListener('RECameraMove', onCameraMove);
-    document.addEventListener('RESelectChanged', onSelChanged);
-
-    return () => {
-      document.removeEventListener('RESystemEngineCreated', onEngineCreated);
-      document.removeEventListener('REDataSetLoadProgress', onProgress);
-      document.removeEventListener('REDataSetLoadFinish', onLoadFinish);
-      document.removeEventListener('RESystemReady', onSystemReady);
-      document.removeEventListener('RECameraMove', onCameraMove);
-      document.removeEventListener('RESelectChanged', onSelChanged);
-    };
-  }, []);
-
-  // 加载 SDK（必须按顺序：RealBIMWeb.js → BlackHole3D.js）
-  const loadSDK = useCallback(async () => {
-    setStatus('sdk-loading');
-    setProgress('');
+  // ─── 初始化 AR 场景 ────────────────────────────────────────────────────
+  const initAR = async () => {
     try {
-      if (window.CreateBlackHoleWebSDK) { setStatus('sdk-ready'); return; }
+      setStatus('camera-requesting')
+      setProgress('请求摄像头权限...')
 
-      // Step 1: 先加载 RealBIMWeb.js（定义 CreateModuleRE2）
-      setProgress('加载 RealBIMWeb.js...');
-      const s1 = document.createElement('script');
-      s1.src = `${SDK_BASE}/RealBIMWeb.js`;
-      document.head.appendChild(s1);
-      await new Promise<void>((ok, no) => {
-        s1.onload = () => ok();
-        s1.onerror = () => no(new Error('RealBIMWeb.js 加载失败'));
-      });
+      // 动态 import Three.js（避免 SSR 报错）
+      const THREE = await import('three')
+      const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
 
-      // 等待 CreateModuleRE2 就绪
-      await new Promise<void>((ok, no) => {
-        let elapsed = 0;
-        const c = () => {
-          if (window.CreateModuleRE2) { ok(); return; }
-          elapsed += 100;
-          if (elapsed > 10000) { no(new Error('CreateModuleRE2 未就绪超时')); return; }
-          setTimeout(c, 100);
-        };
-        c();
-      });
-      console.log('[BH] RealBIMWeb.js loaded, CreateModuleRE2 ready');
+      // 动态加载 AR.js（通过 CDN script 注入）
+      await loadARjsScript()
 
-      // Step 2: 再加载 BlackHole3D.js（依赖 CreateModuleRE2）
-      setProgress('加载 BlackHole3D.js...');
-      const s2 = document.createElement('script');
-      s2.src = `${SDK_BASE}/BlackHole3D.js`;
-      document.head.appendChild(s2);
-      await new Promise<void>((ok, no) => {
-        s2.onload = () => ok();
-        s2.onerror = () => no(new Error('BlackHole3D.js 加载失败'));
-      });
+      // ── 获取 DOM 元素 ──────────────────────────────────────────────
+      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
+      renderer.setPixelRatio(window.devicePixelRatio)
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.shadowMap.enabled = true
 
-      // 等待 CreateBlackHoleWebSDK 就绪
-      await new Promise<void>((ok, no) => {
-        let elapsed = 0;
-        const c = () => {
-          if (window.CreateBlackHoleWebSDK) { ok(); return; }
-          elapsed += 50;
-          if (elapsed > 10000) { no(new Error('CreateBlackHoleWebSDK 未就绪超时')); return; }
-          setTimeout(c, 50);
-        };
-        c();
-      });
+      const container = document.getElementById('ar-container')
+      if (!container) throw new Error('找不到 #ar-container')
+      container.appendChild(renderer.domElement)
 
-      setStatus('sdk-ready');
-      Taro.showToast({ title: 'SDK 加载成功', icon: 'success', duration: 1500 });
-    } catch (e: any) {
-      console.error('[BH] SDK load error:', e);
-      setStatus('error'); setErrorMsg(e.message || 'SDK加载失败');
-    }
-  }, []);
+      // ── 场景 & 相机 ────────────────────────────────────────────────
+      const scene = new THREE.Scene()
+      const camera = new THREE.Camera()
 
-  // 初始化引擎
-  const initEngine = useCallback(async () => {
-    if (!window.CreateBlackHoleWebSDK) return;
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+      // 光照
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7)
+      scene.add(ambientLight)
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9)
+      dirLight.position.set(2, 4, 3)
+      dirLight.castShadow = true
+      scene.add(dirLight)
 
-    setStatus('engine-init');
-    setProgress('初始化渲染器...');
+      // ── AR 控制器 ─────────────────────────────────────────────────
+      // sourceType: webcam | video | image
+      const arSession = await ARjs.init({
+        renderer,
+        scene,
+        camera,
+        sourceType: 'webcam',
+        detectionMode: 'mono_and_matrix',
+        matrixCodeType: '3x3',
+        // patternRatio: 0.7,
+        debugUIEnabled: false,
+        maxDetectionRate: 60,
+        canvasWidth: window.innerWidth,
+        canvasHeight: window.innerHeight,
+      })
 
-    try {
-      const Module: any = {
-        canvas,
-        locateFile: (fn: string) => {
-          if (fn.endsWith('.js') || fn.endsWith('.wasm')) return `${SDK_BASE}/${fn}`;
-          return fn;
-        },
-        mainScriptUrlOrBlob: `${SDK_BASE}/RealBIMWeb.js`,
-        print: (t: string) => console.log('[BH]', t),
-        printErr: (t: string) => console.warn('[BH]', t),
-        preRun: [(m: any) => {
-          // 预加载 assets.bin 到内存文件系统
-          try { m.FS_createPreloadedFile('/', 'assets.bin', `${SDK_BASE}/assets.bin`, true, false); } catch(e) {}
-        }],
-      };
+      // 隐藏 AR.js 默认的黄框调试覆盖层
+      arSession.parameters.sourceVideoElement.style.opacity = '0'
+      arSession.parameters.sourceVideoElement.style.position = 'fixed'
+      arSession.parameters.sourceVideoElement.style.top = '0'
+      arSession.parameters.sourceVideoElement.style.left = '0'
 
-      window.CreateBlackHoleWebSDK(Module);
-      setProgress('加载 WASM 模块...');
+      // ── 识别图（图像模式，检测指定图片）────────────────────────────
+      // 如使用 Hiro/Kanji 等内置图案，改为 patternUrl
+      // const markerControls = new ARjs.MarkerControls(arSession, camera, {
+      //   type: 'pattern',
+      //   patternUrl: DEFAULT_MARKER_PATTERN,
+      //   changeMatrixMode: 'cameraTransformMatrix',
+      // })
 
-      // 等待 WASM 就绪
-      await new Promise<void>((ok, no) => {
-        let el = 0;
-        const t = setInterval(() => {
-          el += 200;
-          if (Module.RealBIMWeb && typeof Module.initEngineSys === 'function') {
-            clearInterval(t);
-            ok();
-          } else if (el > 30000) {
-            clearInterval(t);
-            no(new Error('WASM 模块加载超时（30s）'));
+      // ── 自动模式（检测任意平面/图像）───────────────────────────────
+      // 当前使用 ARjs 默认的 Hiro 图案识别
+      const markerControls = new ARjs.MarkerControls(arSession, camera, {
+        type: 'pattern',
+        patternUrl: DEFAULT_MARKER_PATTERN,
+        changeMatrixMode: 'cameraTransformMatrix',
+        minConfidence: 0.7,
+      } as any)
+
+      markerControls.addEventListener('markerFound', () => {
+        console.log('[AR] ✅ Marker detected')
+        setMarkerFound(true)
+        if (modelGroupRef.current) modelGroupRef.current.visible = true
+        Taro.showToast({ title: '识别到标记！', icon: 'success', duration: 1000 })
+      })
+
+      markerControls.addEventListener('markerLost', () => {
+        console.log('[AR] 🔍 Marker lost')
+        setMarkerFound(false)
+        if (modelGroupRef.current) modelGroupRef.current.visible = false
+      })
+
+      rendererRef.current = renderer
+      sceneRef.current = scene
+      cameraRef.current = camera
+      arMarkerRef.current = markerControls
+
+      // ── 加载 FBX 模型 ──────────────────────────────────────────────
+      setStatus('model-loading')
+      setProgress('加载模型...')
+      setStatus('model-loading')
+
+      const loader = new FBXLoader()
+      loader.load(
+        MODEL_URL,
+        (group) => {
+          console.log('[AR] FBX loaded, children:', group.children.length)
+
+          // 自动居中 + 缩放适配
+          const box = new THREE.Box3().setFromObject(group)
+          const center = box.getCenter(new THREE.Vector3())
+          const size = box.getSize(new THREE.Vector3())
+          const maxDim = Math.max(size.x, size.y, size.z)
+          const scale = 1.0 / maxDim * 1.5  // 适配到约 1.5 单位
+          group.scale.setScalar(scale)
+
+          // 底部对齐 y=0
+          group.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale)
+
+          // 默认隐藏，等待 marker 检测到再显示
+          group.visible = false
+          group.traverse((child: any) => {
+            if (child.isMesh) {
+              child.castShadow = true
+              child.receiveShadow = true
+            }
+          })
+
+          modelGroupRef.current = group
+          scene.add(group)
+
+          // 动画混合器
+          if (group.animations && group.animations.length > 0) {
+            mixerRef.current = new THREE.AnimationMixer(group)
+            mixerRef.current.clipAction(group.animations[0]).play()
           }
-        }, 200);
-      });
 
-      const sysInfo = new Module.RESysInfo();
-      sysInfo.workerjsPath = `${SDK_BASE}/RealBIMWeb_Worker.js`;
-      sysInfo.renderWidth = canvas.clientWidth || window.innerWidth;
-      sysInfo.renderHieght = canvas.clientHeight || Math.floor(window.innerHeight * 0.65);
-      sysInfo.commonUrl = SDK_CONFIG.commonUrl;
-      sysInfo.userName = SDK_CONFIG.userName || '';
-      sysInfo.passWord = SDK_CONFIG.passWord || '';
-      sysInfo.mainWndName = 'BlackHole3D';
+          clockRef.current = new THREE.Clock()
 
-      setProgress('启动渲染引擎...');
-      const result = Module.initEngineSys(sysInfo);
-      if (!result) throw new Error('initEngineSys 返回 false');
+          setStatus('model-ready')
+          setProgress('')
+          Taro.showToast({ title: '模型加载完成', icon: 'success', duration: 1500 })
 
-      Module.setOperationMode(1); // 触控模式
-      moduleRef.current = Module;
-      console.log('[BH] Engine init done, waiting for RESystemEngineCreated...');
-    } catch (e: any) {
-      setStatus('error'); setErrorMsg(e.message || '引擎初始化失败');
-      console.error('[BH] Engine init error:', e);
+          // 开始渲染循环
+          animate()
+        },
+        (xhr) => {
+          const pct = Math.round((xhr.loaded / xhr.total) * 100)
+          setProgress(`加载模型 ${pct}%`)
+        },
+        (err) => {
+          console.error('[AR] FBX load error:', err)
+          setStatus('error')
+          setErrorMsg('FBX 模型加载失败: ' + (err?.message || String(err)))
+        }
+      )
+
+      // ── 渲染循环 ──────────────────────────────────────────────────
+      function animate() {
+        animationIdRef.current = requestAnimationFrame(animate)
+        const delta = clockRef.current?.getDelta() || 0
+        mixerRef.current?.update(delta)
+        renderer.render(scene, camera)
+      }
+
+      setStatus('ar-inited')
+
+    } catch (err: any) {
+      console.error('[AR] Init error:', err)
+      if (err?.name === 'NotAllowedError' || err?.message?.includes('Permission')) {
+        setStatus('camera-denied')
+        setErrorMsg('摄像头权限被拒绝，请在浏览器设置中允许摄像头访问')
+      } else {
+        setStatus('error')
+        setErrorMsg(err?.message || String(err))
+      }
     }
-  }, []);
+  }
 
-  // 加载模型
-  const loadModel = useCallback(() => {
-    const M = moduleRef.current;
-    if (!M) return;
-    setStatus('model-loading');
-    setProgress('开始加载模型...');
-    try {
-      const ds = new M.REDataSet();
-      ds.dataSetId = SDK_CONFIG.datasetId;
-      ds.resourcesAddress = SDK_CONFIG.resourcesAddress;
-      console.log('[BH] Loading dataset:', ds.dataSetId, ds.resourcesAddress);
-      M.Model.loadDataSet([ds], true);
-    } catch (e: any) {
-      setStatus('error'); setErrorMsg(e.message || '模型加载异常');
+  // ─── 加载 AR.js CDN Script ──────────────────────────────────────────────
+  const loadARjsScript = (): Promise<void> => {
+    return new Promise((resolve, reject) => {
+      // 避免重复加载
+      if (typeof ARjs !== 'undefined') { resolve(); return }
+
+      const script = document.createElement('script')
+      script.src = 'https://cdn.jsdelivr.net/npm/ar.js@2.2.2/three.js/build/ar.js'
+      script.onload = () => resolve()
+      script.onerror = () => reject(new Error('AR.js CDN 加载失败，请检查网络'))
+      document.head.appendChild(script)
+    })
+  }
+
+  // ─── 重置 ───────────────────────────────────────────────────────────────
+  const handleReset = () => {
+    if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current)
+    if (rendererRef.current) {
+      rendererRef.current.dispose()
+      const canvas = rendererRef.current.domElement
+      canvas?.parentElement?.removeChild(canvas)
     }
-  }, []);
+    rendererRef.current = null
+    sceneRef.current = null
+    cameraRef.current = null
+    arMarkerRef.current = null
+    mixerRef.current = null
+    modelGroupRef.current = null
+    setStatus('idle')
+    setErrorMsg('')
+    setProgress('')
+    setMarkerFound(false)
+  }
 
-  const resetCamera = useCallback(() => {
-    const M = moduleRef.current;
-    if (!M) return;
-    try { M.Camera.setCamLocateDefault(); } catch(e) {}
-  }, []);
+  // ─── 清理 ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current)
+      rendererRef.current?.dispose()
+    }
+  }, [])
 
-  const fitView = useCallback(() => {
-    const M = moduleRef.current;
-    if (!M) return;
-    try { M.Camera.setCamLocateToBound(); } catch(e) {}
-  }, []);
+  // ─── 状态映射 ───────────────────────────────────────────────────────────
+  const statusLabel: Record<ARStatus, string> = {
+    idle: '待启动',
+    'camera-requesting': '请求摄像头',
+    'camera-denied': '权限被拒',
+    'ar-inited': 'AR 已就绪',
+    'marker-detected': '识别到标记',
+    'model-loading': '加载模型',
+    'model-ready': '运行中',
+    error: '错误',
+  }
 
-  const explodeView = useCallback(() => {
-    const M = moduleRef.current;
-    if (!M) return;
-    try {
-      const v = M.BIM.getDataseExplodeView(SDK_CONFIG.datasetId);
-      if (v) M.Camera.setCamLocateTo(v);
-    } catch(e) {}
-  }, []);
-
-  const statusMap: Record<S, string> = {
-    idle: '待初始化', 'sdk-loading': 'SDK 加载中', 'sdk-ready': 'SDK 就绪',
-    'engine-init': '引擎初始化', 'engine-ready': '引擎就绪',
-    'model-loading': '加载模型', 'model-ready': '模型就绪', error: '错误',
-  };
+  const canStart = status === 'idle'
 
   return (
     <View className="viewer-page">
-      {/* 3D 渲染区域 */}
-      <View className="canvas-container" style={{ height: `${canvasH}vh` }}>
-        <canvas
-          ref={canvasRef}
-          id="canvas"
-          className="engine-canvas"
-          style={{ width: '100%', height: '100%', display: 'block', touchAction: 'none' }}
-        />
+      {/* ── AR 渲染容器 ────────────────────────────────────────────── */}
+      <View id="ar-container" className="ar-container" />
 
-        {['sdk-loading', 'engine-init', 'model-loading'].includes(status) && (
-          <View className="status-overlay">
-            <View className="loading-spinner" />
-            <Text className="status-text">{statusMap[status]}</Text>
-            {progress && <Text className="progress-text">{progress}</Text>}
-          </View>
-        )}
-        {status === 'error' && (
-          <View className="status-overlay error">
-            <Text className="status-text">❌ {errorMsg}</Text>
-            <Text className="progress-text" style={{ marginTop: 8, fontSize: 11 }}>点击下方按钮重试</Text>
-          </View>
-        )}
+      {/* ── 摄像头预览覆盖层 ──────────────────────────────────────── */}
+      <View className="camera-hint">
+        <Text className="hint-text">📷 AR 需摄像头权限，请对准识别图</Text>
+        <Text className="hint-hint">推荐用 Hiro 图案（手机屏幕显示 https://git.io/fxZH2）</Text>
       </View>
 
-      {/* 控制栏 */}
+      {/* ── 状态悬浮层 ────────────────────────────────────────────── */}
+      {(status === 'camera-requesting' || status === 'model-loading') && (
+        <View className="status-overlay">
+          <View className="loading-spinner" />
+          <Text className="status-text">{statusLabel[status]}</Text>
+          {progress && <Text className="progress-text">{progress}</Text>}
+        </View>
+      )}
+
+      {status === 'camera-denied' && (
+        <View className="status-overlay error">
+          <Text className="status-text">📵 {statusLabel[status]}</Text>
+          <Text className="progress-text">{errorMsg}</Text>
+          <Text className="progress-text" style={{ marginTop: 8 }}>点击下方「重新启动」按钮重试</Text>
+        </View>
+      )}
+
+      {status === 'error' && (
+        <View className="status-overlay error">
+          <Text className="status-text">❌ {errorMsg}</Text>
+          <Text className="progress-text" style={{ marginTop: 8 }}>点击下方「重新启动」按钮</Text>
+        </View>
+      )}
+
+      {/* ── 模型控制栏 ────────────────────────────────────────────── */}
       <View className="control-bar">
         <View className="status-row">
-          <View className={`status-dot ${status === 'model-ready' ? 'green' : status === 'error' ? 'red' : 'yellow'}`} />
-          <Text className="status-label">{statusMap[status]}</Text>
-          {progress && status !== 'idle' && status !== 'error' && (
+          <View className={`status-dot ${
+            status === 'model-ready' ? 'green' :
+            status === 'error' || status === 'camera-denied' ? 'red' :
+            'yellow'
+          }`} />
+          <Text className="status-label">{statusLabel[status]}</Text>
+          {markerFound && (
+            <Text className="marker-badge">🎯 识别图已追踪</Text>
+          )}
+          {progress && (
             <Text className="progress-label">{progress}</Text>
           )}
         </View>
 
         <View className="btn-group">
-          {status === 'idle' && <View className="btn primary" onClick={loadSDK}>加载 SDK</View>}
-          {status === 'sdk-ready' && <View className="btn primary" onClick={initEngine}>初始化引擎</View>}
-          {status === 'engine-ready' && <View className="btn primary" onClick={loadModel}>加载模型</View>}
-          {status === 'model-ready' && (
-            <>
-              <View className="btn" onClick={resetCamera}>复位</View>
-              <View className="btn" onClick={fitView}>适配</View>
-              <View className="btn" onClick={explodeView}>拆分</View>
-            </>
+          {canStart && (
+            <View className="btn primary" onClick={initAR}>启动 AR</View>
           )}
-          {['sdk-ready', 'error'].includes(status) && status !== 'idle' && (
-            <View className="btn warn" onClick={() => { setStatus('idle'); setErrorMsg(''); setProgress(''); }}>重置</View>
+          {['camera-denied', 'error', 'model-ready', 'ar-inited'].includes(status) && (
+            <View className="btn warn" onClick={handleReset}>重新启动</View>
           )}
         </View>
       </View>
 
-      {/* 手势提示 */}
+      {/* ── 模型加载完成后手势提示 ───────────────────────────────── */}
       {status === 'model-ready' && (
         <View className="gesture-hints">
-          <Text className="hint">👆 单指旋转 | 🤏 双指缩放 | ✋ 双指平移</Text>
+          <Text className="hint">👆 单指旋转 | 🤏 双指缩放平移</Text>
         </View>
       )}
 
-      {/* 数据集信息 */}
+      {/* ── 模型信息 ─────────────────────────────────────────────── */}
       <View className="info-bar">
         <Text className="info-text">
-          {SDK_CONFIG.datasetId ? `📦 ${SDK_CONFIG.datasetId}` : '⚙️ 未配置数据集'}
+          📦 {MODEL_URL} | BlackHole SDK 接口已保留（备用）
         </Text>
       </View>
     </View>
-  );
+  )
 }
