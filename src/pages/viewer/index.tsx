@@ -1,46 +1,41 @@
 /**
- * WebAR 页面 - 图像识别 + 3D 模型叠加
- * 基于 AR.js + Three.js
+ * WebAR 页面 - 摄像头 + Three.js 3D 模型叠加
+ * 纯原生实现，不依赖 AR.js
  *
- * 【保留 BlackHole SDK 接口注释】如需恢复黑洞引擎，注释掉下方 AR 代码段，
- * 取消 src/components/blackhole-loader.ts 的引用即可。
+ * 技术栈：
+ * - navigator.mediaDevices.getUserMedia → 摄像头视频流
+ * - Three.js → 3D 渲染（FBX 模型）
+ * - 视频背景 + WebGL 场景叠加
  */
 import { useEffect, useRef, useState } from 'react'
 import { View, Text } from '@tarojs/components'
 import Taro from '@tarojs/taro'
 import './viewer.scss'
 
-// ─── AR 场景类型声明 ───────────────────────────────────────────────────────
-declare const ARjs: any
-
 type ARStatus =
   | 'idle'
   | 'camera-requesting'
   | 'camera-denied'
   | 'ar-inited'
-  | 'marker-detected'
   | 'model-loading'
   | 'model-ready'
   | 'error'
 
 const MODEL_URL = '/models/test.fbx'
-const MARKER_URL = '/images/marker.png'   // 识别图（需自行放置）
-const DEFAULT_MARKER_PATTERN = 'https://raw.githubusercontent.com/AR-js-org/AR.js/master/data/images/hiro.png'
 
 export default function Viewer() {
   const rendererRef = useRef<any>(null)
   const sceneRef = useRef<any>(null)
   const cameraRef = useRef<any>(null)
-  const arMarkerRef = useRef<any>(null)
   const mixerRef = useRef<any>(null)
   const clockRef = useRef<any>(null)
   const animationIdRef = useRef<number>(0)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
   const modelGroupRef = useRef<any>(null)
 
   const [status, setStatus] = useState<ARStatus>('idle')
   const [errorMsg, setErrorMsg] = useState('')
   const [progress, setProgress] = useState('')
-  const [markerFound, setMarkerFound] = useState(false)
 
   // ─── 初始化 AR 场景 ────────────────────────────────────────────────────
   const initAR = async () => {
@@ -48,98 +43,113 @@ export default function Viewer() {
       setStatus('camera-requesting')
       setProgress('请求摄像头权限...')
 
-      // 动态 import Three.js（避免 SSR 报错）
+      // ═══ 1. 获取摄像头视频流 ═══
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: 'environment', // 后置摄像头
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      })
+
+      // 创建 video 元素播放流
+      const video = document.createElement('video')
+      video.srcObject = stream
+      video.setAttribute('playsinline', '') // iOS 内联播放
+        video.setAttribute('webkit-playsinline', '')
+      video.muted = true
+      video.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        z-index: 0;
+      `
+      document.body.appendChild(video)
+      videoRef.current = video
+      await video.play()
+
+      setProgress('摄像头已启动，初始化 3D 场景...')
+
+      // ═══ 2. 动态加载 Three.js ═══
       const THREE = await import('three')
       const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js')
 
-      // 动态加载 AR.js（通过 CDN script 注入）
-      await loadARjsScript()
-
-      // ── 获取 DOM 元素 ──────────────────────────────────────────────
-      const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true })
-      renderer.setPixelRatio(window.devicePixelRatio)
-      renderer.setSize(window.innerWidth, window.innerHeight)
-      renderer.shadowMap.enabled = true
-
+      // ═══ 3. 创建渲染器 ═══
       const container = document.getElementById('ar-container')
       if (!container) throw new Error('找不到 #ar-container')
+
+      const renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        premultipliedAlpha: false,
+      })
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
+      renderer.setSize(window.innerWidth, window.innerHeight)
+      renderer.domElement.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        z-index: 1;
+        pointer-events: none;
+      `
       container.appendChild(renderer.domElement)
 
-      // ── 场景 & 相机 ────────────────────────────────────────────────
+      // ═══ 4. 场景 & 相机 ═══
       const scene = new THREE.Scene()
-      const camera = new THREE.Camera()
+      // 用透视相机模拟真实世界视角
+      const camera = new THREE.PerspectiveCamera(
+        60, // FOV
+        window.innerWidth / window.innerHeight,
+        0.01,
+        2000
+      )
+      camera.position.z = 5
 
       // 光照
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.7)
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8)
       scene.add(ambientLight)
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.9)
-      dirLight.position.set(2, 4, 3)
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.0)
+      dirLight.position.set(3, 5, 4)
       dirLight.castShadow = true
       scene.add(dirLight)
 
-      // ── AR 控制器 ─────────────────────────────────────────────────
-      // sourceType: webcam | video | image
-      const arSession = await ARjs.init({
-        renderer,
-        scene,
-        camera,
-        sourceType: 'webcam',
-        detectionMode: 'mono_and_matrix',
-        matrixCodeType: '3x3',
-        // patternRatio: 0.7,
-        debugUIEnabled: false,
-        maxDetectionRate: 60,
-        canvasWidth: window.innerWidth,
-        canvasHeight: window.innerHeight,
-      })
+      // 补光
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.4)
+      fillLight.position.set(-3, 2, -4)
+      scene.add(fillLight)
 
-      // 隐藏 AR.js 默认的黄框调试覆盖层
-      arSession.parameters.sourceVideoElement.style.opacity = '0'
-      arSession.parameters.sourceVideoElement.style.position = 'fixed'
-      arSession.parameters.sourceVideoElement.style.top = '0'
-      arSession.parameters.sourceVideoElement.style.left = '0'
-
-      // ── 识别图（图像模式，检测指定图片）────────────────────────────
-      // 如使用 Hiro/Kanji 等内置图案，改为 patternUrl
-      // const markerControls = new ARjs.MarkerControls(arSession, camera, {
-      //   type: 'pattern',
-      //   patternUrl: DEFAULT_MARKER_PATTERN,
-      //   changeMatrixMode: 'cameraTransformMatrix',
-      // })
-
-      // ── 自动模式（检测任意平面/图像）───────────────────────────────
-      // 当前使用 ARjs 默认的 Hiro 图案识别
-      const markerControls = new ARjs.MarkerControls(arSession, camera, {
-        type: 'pattern',
-        patternUrl: DEFAULT_MARKER_PATTERN,
-        changeMatrixMode: 'cameraTransformMatrix',
-        minConfidence: 0.7,
-      } as any)
-
-      markerControls.addEventListener('markerFound', () => {
-        console.log('[AR] ✅ Marker detected')
-        setMarkerFound(true)
-        if (modelGroupRef.current) modelGroupRef.current.visible = true
-        Taro.showToast({ title: '识别到标记！', icon: 'success', duration: 1000 })
-      })
-
-      markerControls.addEventListener('markerLost', () => {
-        console.log('[AR] 🔍 Marker lost')
-        setMarkerFound(false)
-        if (modelGroupRef.current) modelGroupRef.current.visible = false
-      })
+      // ═══ 5. 视频纹理作为背景（可选，video 已是 CSS 背景）═══
+      // 如果需要将视频作为 WebGL 背景，取消下方注释：
+      /*
+      const videoTexture = new THREE.VideoTexture(video)
+      videoTexture.minFilter = THREE.LinearFilter
+      videoTexture.magFilter = THREE.LinearFilter
+      videoTexture.format = THREE.RGBFormat
+      const bgPlane = new THREE.PlaneGeometry(2, 2)
+      const bgMaterial = new THREE.MeshBasicMaterial({ map: videoTexture })
+      const bgMesh = new THREE.Mesh(bgPlane, bgMaterial)
+      bgMesh.position.z = -10
+      scene.add(bgMesh)
+      */
 
       rendererRef.current = renderer
       sceneRef.current = scene
       cameraRef.current = camera
-      arMarkerRef.current = markerControls
 
-      // ── 加载 FBX 模型 ──────────────────────────────────────────────
-      setStatus('model-loading')
-      setProgress('加载模型...')
-      setStatus('model-loading')
+      setStatus('ar-inited')
+      setProgress('加载 FBX 模型...')
 
+      // ═══ 6. 加载 FBX 模型 ═══
+      setStatus('model-loading')
       const loader = new FBXLoader()
+
       loader.load(
         MODEL_URL,
         (group) => {
@@ -150,14 +160,12 @@ export default function Viewer() {
           const center = box.getCenter(new THREE.Vector3())
           const size = box.getSize(new THREE.Vector3())
           const maxDim = Math.max(size.x, size.y, size.z)
-          const scale = 1.0 / maxDim * 1.5  // 适配到约 1.5 单位
+          const scale = 1.5 / maxDim
           group.scale.setScalar(scale)
 
-          // 底部对齐 y=0
-          group.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale)
+          // 居中放置在画面中心偏下位置
+          group.position.set(-center.x * scale, -box.min.y * scale - 0.3, -center.z * scale)
 
-          // 默认隐藏，等待 marker 检测到再显示
-          group.visible = false
           group.traverse((child: any) => {
             if (child.isMesh) {
               child.castShadow = true
@@ -194,15 +202,13 @@ export default function Viewer() {
         }
       )
 
-      // ── 渲染循环 ──────────────────────────────────────────────────
+      // ═══ 7. 渲染循环 ═══
       function animate() {
         animationIdRef.current = requestAnimationFrame(animate)
         const delta = clockRef.current?.getDelta() || 0
         mixerRef.current?.update(delta)
         renderer.render(scene, camera)
       }
-
-      setStatus('ar-inited')
 
     } catch (err: any) {
       console.error('[AR] Init error:', err)
@@ -216,44 +222,48 @@ export default function Viewer() {
     }
   }
 
-  // ─── 加载 AR.js CDN Script ──────────────────────────────────────────────
-  const loadARjsScript = (): Promise<void> => {
-    return new Promise((resolve, reject) => {
-      // 避免重复加载
-      if (typeof ARjs !== 'undefined') { resolve(); return }
-
-      const script = document.createElement('script')
-      script.src = 'https://cdn.jsdelivr.net/npm/ar.js@2.2.2/three.js/build/ar.js'
-      script.onload = () => resolve()
-      script.onerror = () => reject(new Error('AR.js CDN 加载失败，请检查网络'))
-      document.head.appendChild(script)
-    })
-  }
-
   // ─── 重置 ───────────────────────────────────────────────────────────────
   const handleReset = () => {
+    // 停止动画
     if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current)
+
+    // 停止摄像头
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = (videoRef.current.srcObject as MediaStream).getTracks()
+      tracks.forEach((track) => track.stop())
+      videoRef.current.remove()
+    }
+    videoRef.current = null
+
+    // 清理渲染器
     if (rendererRef.current) {
       rendererRef.current.dispose()
       const canvas = rendererRef.current.domElement
       canvas?.parentElement?.removeChild(canvas)
     }
+
+    // 清空引用
     rendererRef.current = null
     sceneRef.current = null
     cameraRef.current = null
-    arMarkerRef.current = null
     mixerRef.current = null
     modelGroupRef.current = null
+    clockRef.current = null
+
     setStatus('idle')
     setErrorMsg('')
     setProgress('')
-    setMarkerFound(false)
   }
 
-  // ─── 清理 ───────────────────────────────────────────────────────────────
+  // ─── 组件卸载清理 ──────────────────────────────────────────────────────
   useEffect(() => {
     return () => {
       if (animationIdRef.current) cancelAnimationFrame(animationIdRef.current)
+      if (videoRef.current && videoRef.current.srcObject) {
+        const tracks = (videoRef.current.srcObject as MediaStream).getTracks()
+        tracks.forEach((track) => track.stop())
+        videoRef.current.remove()
+      }
       rendererRef.current?.dispose()
     }
   }, [])
@@ -264,7 +274,6 @@ export default function Viewer() {
     'camera-requesting': '请求摄像头',
     'camera-denied': '权限被拒',
     'ar-inited': 'AR 已就绪',
-    'marker-detected': '识别到标记',
     'model-loading': '加载模型',
     'model-ready': '运行中',
     error: '错误',
@@ -274,16 +283,16 @@ export default function Viewer() {
 
   return (
     <View className="viewer-page">
-      {/* ── AR 渲染容器 ────────────────────────────────────────────── */}
+      {/* AR 渲染容器 */}
       <View id="ar-container" className="ar-container" />
 
-      {/* ── 摄像头预览覆盖层 ──────────────────────────────────────── */}
+      {/* 摄像头提示 */}
       <View className="camera-hint">
-        <Text className="hint-text">📷 AR 需摄像头权限，请对准识别图</Text>
-        <Text className="hint-hint">推荐用 Hiro 图案（手机屏幕显示 https://git.io/fxZH2）</Text>
+        <Text className="hint-text">📷 AR 需要摄像头权限</Text>
+        <Text className="hint-hint">点击下方按钮启动</Text>
       </View>
 
-      {/* ── 状态悬浮层 ────────────────────────────────────────────── */}
+      {/* 状态悬浮层 */}
       {(status === 'camera-requesting' || status === 'model-loading') && (
         <View className="status-overlay">
           <View className="loading-spinner" />
@@ -296,18 +305,18 @@ export default function Viewer() {
         <View className="status-overlay error">
           <Text className="status-text">📵 {statusLabel[status]}</Text>
           <Text className="progress-text">{errorMsg}</Text>
-          <Text className="progress-text" style={{ marginTop: 8 }}>点击下方「重新启动」按钮重试</Text>
+          <Text className="progress-text" style={{ marginTop: 8 }}>点击「重新启动」重试</Text>
         </View>
       )}
 
       {status === 'error' && (
         <View className="status-overlay error">
           <Text className="status-text">❌ {errorMsg}</Text>
-          <Text className="progress-text" style={{ marginTop: 8 }}>点击下方「重新启动」按钮</Text>
+          <Text className="progress-text" style={{ marginTop: 8 }}>点击「重新启动」重试</Text>
         </View>
       )}
 
-      {/* ── 模型控制栏 ────────────────────────────────────────────── */}
+      {/* 控制栏 */}
       <View className="control-bar">
         <View className="status-row">
           <View className={`status-dot ${
@@ -316,12 +325,7 @@ export default function Viewer() {
             'yellow'
           }`} />
           <Text className="status-label">{statusLabel[status]}</Text>
-          {markerFound && (
-            <Text className="marker-badge">🎯 识别图已追踪</Text>
-          )}
-          {progress && (
-            <Text className="progress-label">{progress}</Text>
-          )}
+          {progress && <Text className="progress-label">{progress}</Text>}
         </View>
 
         <View className="btn-group">
@@ -334,18 +338,16 @@ export default function Viewer() {
         </View>
       </View>
 
-      {/* ── 模型加载完成后手势提示 ───────────────────────────────── */}
+      {/* 运行中提示 */}
       {status === 'model-ready' && (
         <View className="gesture-hints">
-          <Text className="hint">👆 单指旋转 | 🤏 双指缩放平移</Text>
+          <Text className="hint">✅ AR 运行中 — 摄像头画面 + 3D 模型叠加显示</Text>
         </View>
       )}
 
-      {/* ── 模型信息 ─────────────────────────────────────────────── */}
+      {/* 信息栏 */}
       <View className="info-bar">
-        <Text className="info-text">
-          📦 {MODEL_URL} | BlackHole SDK 接口已保留（备用）
-        </Text>
+        <Text className="info-text">📦 {MODEL_URL} | Three.js + getUserMedia</Text>
       </View>
     </View>
   )
