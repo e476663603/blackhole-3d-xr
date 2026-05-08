@@ -1,1 +1,0 @@
-"use strict";function ___export(r){for(var t in r)exports.hasOwnProperty(t)||(exports[t]=r[t])}___export(require("./artoolkit.api")),___export(require("./artoolkit.three"));
