@@ -1,4 +1,5 @@
-﻿import { defineConfig, type UserConfigExport } from '@tarojs/cli'
+﻿import path from 'path'
+import { defineConfig, type UserConfigExport } from '@tarojs/cli'
 import TsconfigPathsPlugin from 'tsconfig-paths-webpack-plugin'
 import devConfig from './dev'
 import prodConfig from './prod'
@@ -22,7 +23,8 @@ export default defineConfig(async (merge, { command, mode }) => {
     },
     copy: {
       patterns: [
-        { from: 'public/models', to: 'models' },
+        { from: path.join(__dirname, '..', 'public', 'models'), to: 'models' },
+        { from: path.join(__dirname, '..', 'public', 'artoolkit'), to: 'artoolkit' },
       ],
       options: {
       }

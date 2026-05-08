@@ -1,4 +1,4 @@
-// viewer 页面样式
+// viewer page styles — ARToolKit marker detection version
 .viewer-page {
   width: 100vw;
   height: 100vh;
@@ -22,41 +22,23 @@
   }
 }
 
-// ─── 版本号徽章（右上角）─────────────────────────────────────────────────
+// ─── Version badge (top-right, prominent) ─────────────────────────────
 .version-badge {
   position: absolute;
   top: 10px;
   right: 10px;
-  background: rgba(0, 0, 0, 0.65);
-  border: 1px solid rgba(79, 195, 247, 0.4);
-  border-radius: 6px;
-  padding: 3px 8px;
+  background: rgba(0, 0, 0, 0.75);
+  border: 1px solid rgba(79, 195, 247, 0.6);
+  border-radius: 8px;
+  padding: 4px 10px;
   z-index: 25;
   backdrop-filter: blur(4px);
 
   .version-text {
     color: #4fc3f7;
-    font-size: 10px;
+    font-size: 12px;
+    font-weight: 600;
     font-family: 'SF Mono', 'Fira Code', monospace;
-  }
-}
-
-// ─── XR 模式指示器（左上角）─────────────────────────────────────────────
-.xr-mode-badge {
-  position: absolute;
-  top: 10px;
-  left: 10px;
-  background: rgba(0, 0, 0, 0.65);
-  border: 1px solid rgba(76, 175, 80, 0.4);
-  border-radius: 6px;
-  padding: 3px 8px;
-  z-index: 25;
-  backdrop-filter: blur(4px);
-
-  .xr-mode-text {
-    color: #4caf50;
-    font-size: 11px;
-    font-weight: 500;
   }
 }
 
@@ -87,7 +69,7 @@
   }
 }
 
-// ─── 状态悬浮层 ──────────────────────────────────────────────────────────
+// ─── Status overlay (loading/error) ───────────────────────────────────
 .status-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -117,45 +99,6 @@
   }
 }
 
-// ─── hit-test 扫描提示覆盖层 ──────────────────────────────────────────────
-.hit-test-overlay {
-  position: absolute;
-  top: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 25;
-  pointer-events: none;
-
-  .hit-test-hint {
-    background: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(76, 175, 80, 0.5);
-    border-radius: 10px;
-    padding: 10px 16px;
-    text-align: center;
-    backdrop-filter: blur(4px);
-    animation: pulse-border 2s ease-in-out infinite;
-
-    .hit-test-text {
-      display: block;
-      color: #4caf50;
-      font-size: 13px;
-      font-weight: 600;
-    }
-
-    .hit-test-sub {
-      display: block;
-      color: #999;
-      font-size: 10px;
-      margin-top: 4px;
-    }
-  }
-}
-
-@keyframes pulse-border {
-  0%, 100% { border-color: rgba(76, 175, 80, 0.3); }
-  50% { border-color: rgba(76, 175, 80, 0.8); }
-}
-
 .loading-spinner {
   width: 36px;
   height: 36px;
@@ -167,7 +110,138 @@
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-// ─── 控制栏 ──────────────────────────────────────────────────────────────
+// ─── Scan overlay (key UI — marker scanning) ──────────────────────────
+.scan-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 25;
+  pointer-events: none;
+
+  .scan-frame {
+    width: 220px;
+    height: 220px;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    animation: scan-pulse 2s ease-in-out infinite;
+  }
+
+  .scan-corner {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    border-color: #4fc3f7;
+    border-style: solid;
+    border-width: 0;
+
+    &.tl { top: 0; left: 0; border-top-width: 3px; border-left-width: 3px; border-radius: 4px 0 0 0; }
+    &.tr { top: 0; right: 0; border-top-width: 3px; border-right-width: 3px; border-radius: 0 4px 0 0; }
+    &.bl { bottom: 0; left: 0; border-bottom-width: 3px; border-left-width: 3px; border-radius: 0 0 0 4px; }
+    &.br { bottom: 0; right: 0; border-bottom-width: 3px; border-right-width: 3px; border-radius: 0 0 4px 0; }
+  }
+
+  .scan-text {
+    color: #4fc3f7;
+    font-size: 15px;
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .scan-sub {
+    color: #888;
+    font-size: 11px;
+    margin-top: 4px;
+    text-align: center;
+  }
+}
+
+@keyframes scan-pulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+// ─── Marker detected feedback ─────────────────────────────────────────
+.detect-feedback {
+  position: absolute;
+  top: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  padding: 8px 18px;
+  border-radius: 20px;
+  backdrop-filter: blur(4px);
+
+  &.found {
+    background: rgba(76, 175, 80, 0.85);
+    border: 1px solid rgba(76, 175, 80, 0.9);
+  }
+
+  .detect-text {
+    color: #fff;
+    font-size: 14px;
+    font-weight: 600;
+  }
+}
+
+// ─── Tracking indicator ───────────────────────────────────────────────
+.track-indicator {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  border: 1px solid rgba(76, 175, 80, 0.4);
+  border-radius: 6px;
+  padding: 3px 8px;
+  z-index: 25;
+  backdrop-filter: blur(4px);
+
+  .track-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #4caf50;
+    box-shadow: 0 0 4px #4caf50;
+    animation: track-blink 1.5s ease-in-out infinite;
+  }
+
+  .track-text {
+    color: #4caf50;
+    font-size: 11px;
+    font-weight: 500;
+  }
+}
+
+@keyframes track-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+// ─── Marker lost hint ─────────────────────────────────────────────────
+.marker-lost-hint {
+  position: absolute;
+  bottom: 120px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 25;
+  background: rgba(255, 152, 0, 0.75);
+  border-radius: 20px;
+  padding: 6px 16px;
+
+  .lost-text {
+    color: #fff;
+    font-size: 12px;
+    font-weight: 500;
+  }
+}
+
+// ─── Control bar ──────────────────────────────────────────────────────
 .control-bar {
   width: 100%;
   padding: 10px 12px;
@@ -195,14 +269,6 @@
   .status-label {
     color: #aaa;
     font-size: 12px;
-  }
-
-  .marker-badge {
-    color: #4fc3f7;
-    font-size: 10px;
-    background: rgba(79, 195, 247, 0.15);
-    padding: 2px 6px;
-    border-radius: 4px;
   }
 
   .progress-label {
@@ -246,20 +312,7 @@
   }
 }
 
-.gesture-hints {
-  width: 100%;
-  padding: 6px 12px;
-  background: #0d0d1a;
-  text-align: center;
-  flex-shrink: 0;
-
-  .hint {
-    color: #555;
-    font-size: 11px;
-  }
-}
-
-// ─── 调试面板 ────────────────────────────────────────────────────────────
+// ─── Debug panel ──────────────────────────────────────────────────────
 .debug-panel {
   width: 100%;
   max-height: 100px;
@@ -286,7 +339,7 @@
   }
 }
 
-// ─── 信息栏 ──────────────────────────────────────────────────────────────
+// ─── Info bar ─────────────────────────────────────────────────────────
 .info-bar {
   width: 100%;
   padding: 5px 12px;

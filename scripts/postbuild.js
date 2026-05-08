@@ -34,4 +34,47 @@ if (!html.includes('artoolkit.min.js')) {
 }
 
 fs.writeFileSync(distIndex, html, 'utf8');
+
+// 3. Copy static assets (Taro copy plugin is unreliable)
+const distDir = path.join(__dirname, '..', 'dist');
+const publicDir = path.join(__dirname, '..', 'public');
+
+function copyDir(src, dest) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDir(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+const dirsToCopy = ['models', 'artoolkit'];
+for (const dir of dirsToCopy) {
+  const src = path.join(publicDir, dir);
+  const dest = path.join(distDir, dir);
+  if (fs.existsSync(src)) {
+    copyDir(src, dest);
+    console.log(`[postbuild] Copied ${dir}/ to dist/`);
+  }
+}
+
+// 4. Copy .nojekyll
+const nojekyllSrc = path.join(publicDir, '.nojekyll');
+if (fs.existsSync(nojekyllSrc)) {
+  fs.copyFileSync(nojekyllSrc, path.join(distDir, '.nojekyll'));
+  console.log('[postbuild] Copied .nojekyll');
+}
+
+// 5. Copy images
+const imagesSrc = path.join(publicDir, 'images');
+const imagesDest = path.join(distDir, 'images');
+if (fs.existsSync(imagesSrc)) {
+  copyDir(imagesSrc, imagesDest);
+  console.log('[postbuild] Copied images/ to dist/');
+}
+
 console.log('[postbuild] Done.');
