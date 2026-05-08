@@ -161,12 +161,25 @@ export default function Viewer() {
       const arController = new artoolkit.ARController(vw, vh, './artoolkit/camera_para.dat')
       arControllerRef.current = arController
 
-      // Load Hiro marker pattern
+      // Load Hiro marker pattern — ARToolKit5 returns a Promise
       let hiroMarkerId = -1
-      arController.loadMarker('./artoolkit/patt.hiro', (markerId: number) => {
-        hiroMarkerId = markerId
-        addDebug('Hiro marker loaded, markerId=' + markerId)
-      })
+      try {
+        const result = await arController.loadMarker('./artoolkit/patt.hiro')
+        hiroMarkerId = typeof result === 'number' ? result : (result?.markerId ?? -1)
+        addDebug('✅ Hiro marker loaded, markerId=' + hiroMarkerId)
+      } catch (e: any) {
+        addDebug('⚠️ loadMarker threw (non-fatal), trying callback fallback')
+        // Fallback: try the callback API for older ARToolKit5 builds
+        await new Promise<void>((resolve) => {
+          arController.loadMarker('./artoolkit/patt.hiro', (id: number) => {
+            hiroMarkerId = id
+            addDebug('✅ Hiro marker (callback), markerId=' + id)
+            resolve()
+          })
+          setTimeout(resolve, 2000) // safety timeout
+        })
+      }
+      if (hiroMarkerId < 0) addDebug('⚠️ hiroMarkerId still -1 — marker may still be loadable via detect()')
 
       addDebug('ARToolKit initialized')
 
@@ -250,15 +263,77 @@ export default function Viewer() {
           addDebug('Model loaded, waiting for marker detection...')
 
           // ─── Render loop ───
+          let scanStartTime = Date.now()
+          const SCAN_TIMEOUT_MS = 12000 // 12 秒后提示"未找到识别图"
+
           function animate() {
             animationIdRef.current = requestAnimationFrame(animate)
 
-            // ARToolKit detection
-            if (arControllerRef.current && videoRef.current && videoRef.current.readyState >= 2) {
+            const arCtrl = arControllerRef.current
+            const vid = videoRef.current
+
+            // ARToolKit: detect markers every frame
+            if (arCtrl && vid && vid.readyState >= 2) {
               try {
-                arControllerRef.current.detect(videoRef.current)
+                arCtrl.detect(vid)
               } catch (e: any) {
-                // Silently continue — ARToolKit detect errors are non-fatal
+                // detect() errors are non-fatal, keep running
+              }
+
+              // ───主动查询标记数组，而非依赖事件 ───
+              // arCtrl.markers 包含本帧检测到的所有标记
+              const detectedMarkers: any[] = arCtrl.markers || []
+
+              if (detectedMarkers.length > 0) {
+                // 找到任意一个已注册的标记（Hiro）
+                const found = detectedMarkers[0]
+                if (!markerVisibleRef.current) {
+                  updateMarkerVisible(true)
+                  if (statusRef.current !== 'tracking' && statusRef.current !== 'detected') {
+                    updateStatus('detected')
+                    addDebug('🎯 Marker detected! id=' + found.id)
+                    Taro.showToast({ title: '✅ 检测到识别图！', icon: 'none', duration: 1500 })
+                    setTimeout(() => updateStatus('tracking'), 600)
+                  }
+                }
+
+                // 从标记矩阵更新模型位置
+                if (modelGroupRef.current && found.matrix) {
+                  const m = found.matrix
+                  // ARToolKit 矩阵是列主序，转换为 Three.js 行主序
+                  const threeMat = new THREE.Matrix4()
+                  threeMat.set(
+                    m[0], m[4], m[8], m[12],
+                    m[1], m[5], m[9], m[13],
+                    m[2], m[6], m[10], m[14],
+                    m[3], m[7], m[11], m[15]
+                  )
+                  threeMat.decompose(
+                    modelGroupRef.current.position,
+                    modelGroupRef.current.quaternion,
+                    modelGroupRef.current.scale
+                  )
+                  // 缩放到合理大小
+                  modelGroupRef.current.scale.setScalar(0.5)
+                }
+              } else {
+                // 本帧未检测到标记
+                if (markerVisibleRef.current) {
+                  updateMarkerVisible(false)
+                  if (statusRef.current !== 'scanning') {
+                    updateStatus('scanning')
+                    addDebug('❌ Marker lost')
+                  }
+                }
+
+                // 超时提示
+                const elapsed = Date.now() - scanStartTime
+                if (elapsed > SCAN_TIMEOUT_MS) {
+                  // 仅提示一次
+                  scanStartTime = Date.now() // reset so it fires again after another interval
+                  addDebug('⏰ Scan timeout — marker not found in ' + (SCAN_TIMEOUT_MS / 1000) + 's')
+                  Taro.showToast({ title: '⚠️ 未找到识别图，请对准 Hiro 图案', icon: 'none', duration: 3000 })
+                }
               }
             }
 
@@ -273,7 +348,8 @@ export default function Viewer() {
           }
           animate()
 
-          Taro.showToast({ title: 'AR 就绪，请对准识别图', icon: 'none', duration: 2000 })
+          addDebug('Model loaded, entering scan mode...')
+          Taro.showToast({ title: '📷 AR 就绪，请对准识别图', icon: 'none', duration: 2000 })
         },
         (xhr) => {
           const pct = xhr.total > 0 ? Math.round((xhr.loaded / xhr.total) * 100) : 0
@@ -286,7 +362,7 @@ export default function Viewer() {
         }
       )
 
-      // ARToolKit marker event
+      // ARToolKit marker event — kept as supplementary (some builds fire this)
       arController.addEventListener('getMarker', (e: any) => {
         const marker = e.data?.marker
         if (marker && marker.id >= 0) {
@@ -294,37 +370,32 @@ export default function Viewer() {
             updateMarkerVisible(true)
             if (statusRef.current !== 'tracking') {
               updateStatus('detected')
-              addDebug('🎯 Hiro marker detected! id=' + marker.id)
-              // Quick transition to tracking
-              setTimeout(() => updateStatus('tracking'), 500)
+              addDebug('🎯 [event] Marker detected! id=' + marker.id)
+              Taro.showToast({ title: '✅ 检测到识别图！', icon: 'none', duration: 1500 })
+              setTimeout(() => updateStatus('tracking'), 600)
             }
           }
-
-          // Update model position from marker matrix
-          if (modelGroupRef.current) {
+          if (modelGroupRef.current && marker.matrix) {
             const m = marker.matrix
-            if (m && m.length >= 16) {
-              const threeMat = new THREE.Matrix4()
-              threeMat.set(
-                m[0], m[4], m[8], m[12],
-                m[1], m[5], m[9], m[13],
-                m[2], m[6], m[10], m[14],
-                m[3], m[7], m[11], m[15]
-              )
-              threeMat.decompose(
-                modelGroupRef.current.position,
-                modelGroupRef.current.quaternion,
-                modelGroupRef.current.scale
-              )
-              // Scale the model to reasonable size on the marker
-              modelGroupRef.current.scale.setScalar(0.5)
-            }
+            const threeMat = new THREE.Matrix4()
+            threeMat.set(
+              m[0], m[4], m[8], m[12],
+              m[1], m[5], m[9], m[13],
+              m[2], m[6], m[10], m[14],
+              m[3], m[7], m[11], m[15]
+            )
+            threeMat.decompose(
+              modelGroupRef.current.position,
+              modelGroupRef.current.quaternion,
+              modelGroupRef.current.scale
+            )
+            modelGroupRef.current.scale.setScalar(0.5)
           }
         } else {
           if (markerVisibleRef.current) {
             updateMarkerVisible(false)
             updateStatus('scanning')
-            addDebug('❌ Marker lost')
+            addDebug('❌ [event] Marker lost')
           }
         }
       })
